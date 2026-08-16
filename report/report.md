@@ -336,7 +336,8 @@ planning to quantify a model's preferences about itself.
 
 ## Code and Data
 
-Harness, stimuli, all raw responses and the analysis: *[repository link]*. Every call is
+Harness, stimuli, all raw responses and the analysis:
+<https://github.com/DmitrySalnikov/Digital-Minds-Research-Apart-Sprint>. Every call is
 keyed and logged; `scripts/selftest.py` reproduces the full pipeline against a simulated ground
 truth with no network or GPU.
 
