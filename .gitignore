@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.ipynb_checkpoints/
+report/report.html
+report/report.docx
+data/processed/*.npz
