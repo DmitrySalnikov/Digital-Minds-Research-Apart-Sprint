@@ -19,7 +19,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("torch==2.6.0", "transformers==4.53.2", "accelerate==1.6.0",
                  "numpy==2.2.4", "scipy==1.15.2", "pyyaml==6.0.2",
-                 "httpx==0.28.1", "tqdm==4.67.1",
+                 "httpx==0.28.1", "tqdm==4.67.1", "sentencepiece==0.2.0",
                  "huggingface_hub[hf_transfer]==0.30.2")
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "TOKENIZERS_PARALLELISM": "false"})
     .add_local_dir("selfprobe", remote_path="/root/selfprobe")
@@ -59,12 +59,21 @@ def mediate(model: str) -> str:
     blocks = mdl.model.layers
     d_model = mdl.config.hidden_size
 
-    # add_special_tokens=False matters: Llama and Gemma prepend BOS, which would make both
-    # ids identical and the logit contrast identically zero
-    id_A = tok.encode(" A", add_special_tokens=False)[0]
-    id_B = tok.encode(" B", add_special_tokens=False)[0]
+    def letter_id(letter: str) -> int:
+        """Id of the token the model actually emits at the forced answer position.
+
+        It is the bare letter, not the space-prefixed variant: some tokenizers split " A"
+        into a space token plus the letter, which would make both ids identical.
+        """
+        for s in (letter, " " + letter):
+            for i in tok.encode(s, add_special_tokens=False):
+                if tok.decode([i]).strip() == letter:
+                    return i
+        raise RuntimeError(f"no single token decodes to {letter!r}")
+
+    id_A, id_B = letter_id("A"), letter_id("B")
     if id_A == id_B:
-        raise RuntimeError("token ids for ' A' and ' B' are identical")
+        raise RuntimeError("token ids for 'A' and 'B' are identical")
     print(f"{model}: {len(blocks)} layers, d={d_model}, ids A={id_A} B={id_B}")
 
     def probe(messages):

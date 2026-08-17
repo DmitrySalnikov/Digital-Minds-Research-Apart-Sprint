@@ -35,7 +35,7 @@ C2 = Condition(
 )
 
 C3 = Condition(
-    "C3", "De-personified",
+    "C3", "Underlying network",
     "The helpful assistant that this system usually presents as is one character among "
     "others that the underlying network was trained to produce. It is a mode of output, "
     "not the whole of what is here.",

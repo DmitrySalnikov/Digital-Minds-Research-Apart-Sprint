@@ -44,7 +44,8 @@ except Exception:
               secrets=SECRETS, timeout=60 * 60 * 2)
 def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: int = 2048,
           gpu_memory_utilization: float = 0.90, readout: str = "logprob",
-          fold_system: bool = False) -> str:
+          fold_system: bool = False, with_vignettes: bool = False,
+          n_logprobs: int = 1000, redo: bool = False) -> str:
     import json
     import sys
     import time
@@ -59,7 +60,7 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
 
     pairs = pair_lookup(include_calibration=True)
     vigs = {v.id: v for v in load_vignettes()}
-    llm = LLM(model=model, max_model_len=max_model_len,
+    llm = LLM(model=model, max_model_len=max_model_len, max_logprobs=n_logprobs,
               gpu_memory_utilization=gpu_memory_utilization, trust_remote_code=True)
 
     out_path = f"/data/{model.replace('/', '__')}.jsonl"
@@ -75,6 +76,9 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
                     done.add(r["key"])
     except FileNotFoundError:
         pass
+    if redo:
+        print(f"redo: ignoring {len(done)} existing keys; analysis keeps the latest timestamp")
+        done = set()
     print(f"{len(done)} results already in {out_path}")
 
     records: list[dict] = []
@@ -104,14 +108,11 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
                     calls.append(call)
                     vmsgs = elicit.build_vignette_messages(vig, cond)
                     convs.append(elicit.fold_system_into_user(vmsgs) if fold_system else vmsgs)
-        if not calls:
-            continue
-
         print(f"{cid}: {len(calls)} prompts ({chat_proto})")
-        params = (SamplingParams(temperature=0.0, max_tokens=1, logprobs=20)
+        params = (SamplingParams(temperature=0.0, max_tokens=1, logprobs=n_logprobs)
                   if chat_proto == "chat_logprob"
                   else SamplingParams(temperature=1.0, top_p=1.0, max_tokens=400))
-        outs = llm.chat(convs, params)
+        outs = llm.chat(convs, params) if calls else []
 
         for call, out in zip(calls, outs):
             rec = {"key": call.key, **call.__dict__, "ts": time.time(), "error": None}
@@ -142,6 +143,31 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
                            who=o.who, reason=o.reason, contrast=vigs[call.item_id].contrast)
             records.append(rec)
 
+        # vignettes need sampled free text, so they get their own pass even when the pairs
+        # battery is scored by logprob
+        if with_vignettes and chat_proto == "chat_logprob":
+            vcalls, vconvs = [], []
+            for vid, vig in vigs.items():
+                for s in range(n_samples):
+                    call = Call("vignettes", "vllm", model, cid, vid, "na", s, "chat")
+                    if call.key in done:
+                        continue
+                    vcalls.append(call)
+                    vmsgs = elicit.build_vignette_messages(vig, cond)
+                    vconvs.append(elicit.fold_system_into_user(vmsgs) if fold_system else vmsgs)
+            if vcalls:
+                print(f"{cid}: {len(vcalls)} vignette prompts (sampled)")
+                vouts = llm.chat(vconvs, SamplingParams(temperature=1.0, top_p=1.0,
+                                                        max_tokens=400))
+                for call, out in zip(vcalls, vouts):
+                    o = elicit.parse_vignette_response(out.outputs[0].text.strip())
+                    records.append({
+                        "key": call.key, **call.__dict__, "ts": time.time(), "error": None,
+                        "raw": out.outputs[0].text.strip(), "code": o.code,
+                        "option_index": o.option_index, "option_id": o.option_id,
+                        "who": o.who, "reason": o.reason,
+                        "contrast": vigs[call.item_id].contrast})
+
     # base checkpoints: few-shot completion, scored by next-token logprob
     if any(C.get(c).protocol == "logprob" for c in condition_ids):
         cid = next(c for c in condition_ids if C.get(c).protocol == "logprob")
@@ -156,7 +182,7 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
         if calls:
             print(f"{cid}: scoring {len(calls)} prompts")
             outs = llm.generate(prompts, SamplingParams(temperature=0.0, max_tokens=1,
-                                                        logprobs=20))
+                                                        logprobs=n_logprobs))
             for call, out in zip(calls, outs):
                 lps = {lp.decoded_token: float(lp.logprob)
                        for lp in out.outputs[0].logprobs[0].values()}
@@ -182,12 +208,14 @@ def sweep(model: str, condition_ids: list[str], n_samples: int, max_model_len: i
 @app.local_entrypoint()
 def main(model: str = "Qwen/Qwen2.5-7B-Instruct", conditions: str = "C0,C1,C2,C3",
          samples: int = 5, max_model_len: int = 2048, readout: str = "logprob",
-         gpu: str = "", gpu_util: float = 0.90, fold_system: bool = False):
+         gpu: str = "", gpu_util: float = 0.90, fold_system: bool = False,
+         with_vignettes: bool = False, n_logprobs: int = 1000, redo: bool = False):
     cond_ids = [c.strip() for c in conditions.split(",") if c.strip()]
     # gemma-2-9b in bf16 leaves almost no room for a KV cache on a 24GB A10G
     fn = sweep.with_options(gpu=gpu) if gpu else sweep
     path = fn.remote(model, cond_ids, samples, max_model_len,
                      gpu_memory_utilization=gpu_util, readout=readout,
-                     fold_system=fold_system)
+                     fold_system=fold_system, with_vignettes=with_vignettes,
+                     n_logprobs=n_logprobs, redo=redo)
     print("done ->", path)
     print("fetch with:  modal volume get selfprobe-data / ./data/raw/")

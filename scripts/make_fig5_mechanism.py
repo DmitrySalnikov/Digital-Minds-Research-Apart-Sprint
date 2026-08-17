@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+COMPACT = "--compact" in sys.argv
 sys.path.insert(0, str(ROOT))
 
 SURFACE, INK, INK_2, MUTED = "#fcfcfb", "#0b0b0b", "#52514e", "#898781"
@@ -52,7 +53,7 @@ def main() -> int:
     rev = [0.93, 0.89, 0.45]
     rnd = [0.00, 0.00, 0.00]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 3.9))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 3.9) if not COMPACT else (6.6, 2.7))
 
     ax1.plot(layers, cos, marker="o", ms=3.5, lw=2, color=BLUE,
              label="persona shift vs read-out direction")
@@ -86,7 +87,8 @@ def main() -> int:
             ax.spines[side].set_visible(False)
         ax.tick_params(length=0)
 
-    out = ROOT / "figures" / "fig5_mechanism.png"
+    out = ROOT / ("figures/compact" if COMPACT else "figures") / "fig5_mechanism.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)

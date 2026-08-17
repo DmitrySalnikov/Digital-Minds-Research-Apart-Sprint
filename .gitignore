@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .env
 .ipynb_checkpoints/
-report/report.html
-report/report.docx
-data/processed/*.npz
+data/processed/
+figures/_selftest/
+data/synthetic/
+data/smoke/

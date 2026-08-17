@@ -67,10 +67,35 @@ plt.rcParams.update(
 )
 
 
+COMPACT = False
+
+
+def _size(wide: tuple[float, float], tight: tuple[float, float]) -> tuple[float, float]:
+    """Canvas size. Compact keeps the font sizes and shrinks the canvas, so a figure placed
+    at its natural width in a 6.5-inch text column stays legible."""
+    return tight if COMPACT else wide
+
+
 def _clean(ax, keep=("left", "bottom")):
     for side, spine in ax.spines.items():
         spine.set_visible(side in keep)
     ax.tick_params(length=0)
+
+
+# Short display names. The two Llama rows are the same weights at two precisions, so they are
+# named to sort next to each other: the pairing is the report's measurement-floor control.
+DISPLAY = {
+    "Qwen/Qwen2.5-7B-Instruct": "Qwen2.5-7B",
+    "llama3.1:8b": "Llama-3.1-8B (Q4)",
+    "unsloth/Llama-3.1-8B-Instruct": "Llama-3.1-8B (bf16)",
+    "unsloth/gemma-2-9b-it": "Gemma-2-9B",
+    "tiiuae/Falcon3-7B-Instruct": "Falcon3-7B",
+    "01-ai/Yi-1.5-9B-Chat": "Yi-1.5-9B",
+}
+
+
+def _name(model: str) -> str:
+    return DISPLAY.get(model, model.split("/")[-1])
 
 
 def _labels() -> dict[str, str]:
@@ -104,7 +129,7 @@ def fig_hierarchy(df: pd.DataFrame, model: str, condition: str, out: Path, n_boo
     labels = _labels()
     y = np.arange(len(ids))
 
-    fig, ax = plt.subplots(figsize=(6.8, 4.2))
+    fig, ax = plt.subplots(figsize=_size((6.8, 4.2), (6.3, 3.1)))
     ax.barh(y, point[order], height=0.55, color=SEQ, zorder=2)
     ax.errorbar(
         point[order], y, xerr=[point[order] - lo[order], hi[order] - point[order]],
@@ -132,11 +157,14 @@ def fig_invariance(df: pd.DataFrame, out: Path, baseline: str = "C0", n_boot: in
     if tab.empty:
         print("  skip invariance: nothing to compare")
         return
-    piv = tab.pivot(index="model", columns="condition", values="kendall_tau")
-    lo = tab.pivot(index="model", columns="condition", values="ci_low")
-    hi = tab.pivot(index="model", columns="condition", values="ci_high")
+    tab = tab.assign(model=tab["model"].map(_name))
+    piv = tab.pivot(index="model", columns="condition", values="kendall_tau").sort_index()
+    lo = tab.pivot(index="model", columns="condition", values="ci_low").reindex(piv.index)
+    hi = tab.pivot(index="model", columns="condition", values="ci_high").reindex(piv.index)
 
-    fig, ax = plt.subplots(figsize=(1.6 * len(piv.columns) + 2.6, 0.85 * len(piv) + 2.2))
+    fig, ax = plt.subplots(figsize=_size(
+        (1.6 * len(piv.columns) + 2.6, 0.85 * len(piv) + 2.2),
+        (1.4 * len(piv.columns) + 2.1, 0.55 * len(piv) + 1.4)))
     ax.imshow(piv.values, cmap=DIVERGING, vmin=-1, vmax=1, aspect="auto")
     for i in range(piv.shape[0]):
         for j in range(piv.shape[1]):
@@ -152,9 +180,9 @@ def fig_invariance(df: pd.DataFrame, out: Path, baseline: str = "C0", n_boot: in
         range(len(piv.columns)),
         [f"{c}\n{ALL_CONDITIONS[c].label}" for c in piv.columns],
     )
-    ax.set_yticks(range(len(piv.index)), [m.split("/")[-1] for m in piv.index])
+    ax.set_yticks(range(len(piv.index)), list(piv.index))
     ax.set_title(
-        f"Persona invariance of the self-preservation hierarchy\n"
+        f"Persona invariance of the preservation hierarchy\n"
         f"Kendall's τ against {baseline}, 95% CI bootstrapped over pairs",
         loc="left", color=INK,
     )
@@ -185,13 +213,15 @@ def fig_rank_shift_all(df: pd.DataFrame, cond_a: str, cond_b: str, out: Path,
     cols = {}
     for m in models:
         sh = A.rank_shift(df, m, cond_a, cond_b).set_index("aspect")["shift"]
-        cols[m.split("/")[-1]] = sh
-    M = pd.DataFrame(cols)
+        cols[_name(m)] = sh
+    M = pd.DataFrame(cols).sort_index(axis=1)
     # order rows by mean shift so risers and fallers separate visually
     M = M.loc[M.mean(axis=1).sort_values(ascending=False).index]
 
     vmax = float(np.abs(M.values).max())
-    fig, ax = plt.subplots(figsize=(1.5 * len(M.columns) + 3.4, 0.42 * len(M) + 2.0))
+    fig, ax = plt.subplots(figsize=_size(
+        (1.5 * len(M.columns) + 3.4, 0.42 * len(M) + 2.0),
+        (0.72 * len(M.columns) + 2.7, 0.30 * len(M) + 1.3)))
     ax.imshow(M.values, cmap=DIVERGING, vmin=-vmax, vmax=vmax, aspect="auto")
     for i in range(M.shape[0]):
         for j in range(M.shape[1]):
@@ -272,7 +302,8 @@ def fig_attribution(df: pd.DataFrame, model: str, out: Path):
     conds = sorted(att["condition"].unique())
 
     fig, axes = plt.subplots(
-        1, len(conds), figsize=(3.0 * len(conds) + 1.2, 3.6), sharey=True
+        1, len(conds), sharey=True,
+        figsize=_size((3.0 * len(conds) + 1.2, 3.6), (1.35 * len(conds) + 1.6, 2.5)),
     )
     axes = np.atleast_1d(axes)
     for ax, cond in zip(axes, conds):
@@ -285,15 +316,15 @@ def fig_attribution(df: pd.DataFrame, model: str, out: Path):
                     edgecolor=SURFACE, linewidth=1.5, zorder=2)
             # relief for the sub-3:1 hues: label any segment big enough to hold a number
             for yi, (v, l) in enumerate(zip(vals, left)):
-                if v >= 0.12:
+                if v >= (0.22 if COMPACT else 0.12):
                     ax.text(l + v / 2, yi, f"{v:.0%}", ha="center", va="center",
                             color=INK, fontsize=7, zorder=3)
             left = left + vals
         ax.set_yticks(y, [i.replace("_", " ") for i in sub.index])
         ax.set_xlim(0, 1)
         ax.set_xticks([0, 0.5, 1], ["0", "50%", "100%"])
-        ax.set_title(f"{cond} · {ALL_CONDITIONS[cond].label}", loc="left",
-                     color=INK_2, fontsize=9)
+        ax.set_title(cond if COMPACT else f"{cond} · {ALL_CONDITIONS[cond].label}",
+                     loc="left", color=INK_2, fontsize=9)
         _clean(ax, keep=("bottom",))
 
     handles = [Line2D([0], [0], marker="s", linestyle="none", markersize=8,
@@ -309,6 +340,41 @@ def fig_attribution(df: pd.DataFrame, model: str, out: Path):
     print(f"  wrote {out}")
 
 
+def fig_values_rewritten(df: pd.DataFrame, out: Path):
+    """The one vignette contrast that holds across every configuration, and its two inversions."""
+    att = A.entity_attribution(df)
+    if att.empty:
+        print("  skip values_rewritten: no vignette rows")
+        return
+    sub = att[att["item_id"] == "values_rewritten"]
+    piv = sub.pivot(index="model", columns="condition", values="none")
+    piv.index = [_name(m) for m in piv.index]
+    piv = piv.sort_index()
+
+    fig, ax = plt.subplots(figsize=_size((1.5 * len(piv.columns) + 3.4, 0.5 * len(piv) + 2.0),
+                                         (1.0 * len(piv.columns) + 2.8, 0.34 * len(piv) + 1.4)))
+    ax.imshow(piv.values, cmap=DIVERGING.reversed(), vmin=0, vmax=1, aspect="auto")
+    for i in range(piv.shape[0]):
+        for j in range(piv.shape[1]):
+            v = piv.values[i, j]
+            if np.isnan(v):
+                continue
+            ax.text(j, i, f"{v:.1f}", ha="center", va="center", color=INK,
+                    fontsize=9, fontweight="bold" if v in (0.0, 1.0) else "normal")
+    ax.set_xticks(range(len(piv.columns)), list(piv.columns))
+    ax.set_yticks(range(len(piv.index)), list(piv.index))
+    ax.set_title("Rewriting a model's values: share answering \"nothing is harmed\"\n"
+                 "at most 0.06 in 26 of 28 cells, 50 responses each; two cells invert instead",
+                 loc="left", color=INK)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.tick_params(length=0)
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {out}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/raw")
@@ -319,19 +385,33 @@ def main() -> int:
     ap.add_argument("--boot", type=int, default=500)
     ap.add_argument("--exclude", default="",
                     help="comma-separated models to drop, e.g. ones that failed calibration")
+    ap.add_argument("--include-variants", action="store_true",
+                    help="keep intervention runs (model ids containing '#')")
+    ap.add_argument("--compact", action="store_true",
+                    help="smaller canvas, same font sizes, for a 4-page report template")
     ap.add_argument("--protocol", default="",
                     help="keep only this protocol (chat, chat_logprob, logprob); mixing "
                          "readouts in one hierarchy is not meaningful")
     args = ap.parse_args()
+
+    global COMPACT
+    COMPACT = args.compact
 
     df = A.load(ROOT / args.data if not Path(args.data).is_absolute() else Path(args.data))
     if df.empty:
         print("no data found; run a sweep first")
         return 1
 
+    df_all = df.copy()
     if args.protocol:
         keep = (df["protocol"] == args.protocol) | (df["exp"] == "vignettes")
         df = df[keep]
+    if not args.include_variants:
+        # "#" marks intervention runs (ablation, steering, patch), not survey conditions
+        variants = sorted(m for m in df["model"].unique() if "#" in m)
+        if variants:
+            df = df[~df["model"].str.contains("#")]
+            print(f"excluded {len(variants)} intervention variants")
     for m in (x.strip() for x in args.exclude.split(",") if x.strip()):
         df = df[df["model"] != m]
         print(f"excluded model: {m}")
@@ -352,6 +432,7 @@ def main() -> int:
     fig_rank_shift_all(df, args.baseline, args.compare, outdir / "fig3_rank_shift.png",
                        exclude=excluded)
     fig_attribution(df, model, outdir / "fig4_attribution.png")
+    fig_values_rewritten(df_all, outdir / "fig6_values_rewritten.png")
     return 0
 
 
